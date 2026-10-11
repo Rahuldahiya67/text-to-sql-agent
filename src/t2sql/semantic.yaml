@@ -1,0 +1,187 @@
+# Semantic layer for the demo database.
+#
+# - `tables` adds business descriptions to the raw schema (used in LLM prompts and table selection).
+# - `metrics` and `dimensions` define approved calculations once, so every question that says
+#   "revenue" uses the same formula. The offline planner composes SQL from these; the LLM sees
+#   them as guidance.
+# - `joins` is the join graph from the base table `orders`. Each join lists what it depends on.
+
+tables:
+  orders:
+    description: One row per customer order. Base table for sales questions.
+    synonyms: [order, orders, sales order, purchase]
+    columns:
+      order_date: date the order was placed
+      status: delivered, in_transit or cancelled
+  order_items:
+    description: Line items of an order. Revenue = quantity * unit_price.
+    synonyms: [line item, items, revenue, sales, quantity, units]
+    columns:
+      unit_price: price actually charged per unit after discount (INR)
+  shipments:
+    description: One shipment per non-cancelled order, with transporter, dates and freight cost.
+    synonyms: [shipment, dispatch, delivery, freight, transporter, on time, late]
+    columns:
+      promised_date: delivery date promised to the customer
+      delivery_date: actual delivery date, NULL while in transit
+      freight_cost: freight paid to the transporter for this shipment (INR)
+  customers:
+    description: Customers with their city, region and segment.
+    synonyms: [customer, client, buyer, account, segment]
+  regions:
+    description: Sales regions (North, South, East, West). Customers belong to a region.
+    synonyms: [region, zone, area]
+  plants:
+    description: Manufacturing plants that fulfil orders.
+    synonyms: [plant, factory, warehouse, site]
+  products:
+    description: Product catalogue with category and list price.
+    synonyms: [product, item, sku, category, catalogue]
+  transporters:
+    description: Logistics companies that carry shipments.
+    synonyms: [transporter, carrier, logistics partner, vendor]
+
+joins:
+  oi: {table: order_items, condition: "oi.order_id = o.order_id", grain: item}
+  s:  {table: shipments, condition: "s.order_id = o.order_id", grain: order}
+  c:  {table: customers, condition: "c.customer_id = o.customer_id", grain: order}
+  r:  {table: regions, condition: "r.region_id = c.region_id", requires: [c], grain: order}
+  p:  {table: plants, condition: "p.plant_id = o.plant_id", grain: order}
+  pr: {table: products, condition: "pr.product_id = oi.product_id", requires: [oi], grain: item}
+  t:  {table: transporters, condition: "t.transporter_id = s.transporter_id", requires: [s], grain: order}
+
+metrics:
+  revenue:
+    label: Revenue (INR)
+    sql: "SUM(oi.quantity * oi.unit_price)"
+    joins: [oi]
+    grain: item
+    exclude_cancelled: true
+    format: currency
+    synonyms: [revenue, sales, sales value, turnover, billing, invoice value, income, earnings]
+  orders:
+    label: Orders
+    sql: "COUNT(DISTINCT o.order_id)"
+    joins: []
+    grain: order
+    format: integer
+    synonyms: [number of orders, order count, how many orders, orders, order volume]
+  quantity:
+    label: Units sold
+    sql: "SUM(oi.quantity)"
+    joins: [oi]
+    grain: item
+    exclude_cancelled: true
+    format: integer
+    synonyms: [units, quantity, units sold, volume, pieces]
+  avg_order_value:
+    label: Average order value (INR)
+    sql: "SUM(oi.quantity * oi.unit_price) / COUNT(DISTINCT o.order_id)"
+    joins: [oi]
+    grain: item
+    exclude_cancelled: true
+    format: currency
+    synonyms: [average order value, aov, avg order value, average order size]
+  freight_cost:
+    label: Freight cost (INR)
+    sql: "SUM(s.freight_cost)"
+    joins: [s]
+    grain: order
+    format: currency
+    synonyms: [freight, freight cost, transport cost, logistics cost, shipping cost, freight spend]
+  on_time_rate:
+    label: On-time delivery %
+    sql: "ROUND(100.0 * AVG(CASE WHEN s.delivery_date <= s.promised_date THEN 1.0 ELSE 0.0 END), 1)"
+    joins: [s]
+    grain: order
+    where: "s.delivery_date IS NOT NULL"
+    format: percent
+    synonyms: [on time, on-time, on time delivery, otd, otif, delivery performance, punctuality]
+  late_shipments:
+    label: Late shipments
+    sql: "SUM(CASE WHEN s.delivery_date > s.promised_date THEN 1 ELSE 0 END)"
+    joins: [s]
+    grain: order
+    format: integer
+    synonyms: [late, late shipments, delayed, delays, late deliveries]
+  avg_delivery_days:
+    label: Average transit days
+    sql:
+      default: "AVG(s.delivery_date - s.dispatch_date)"
+      sqlite: "AVG(julianday(s.delivery_date) - julianday(s.dispatch_date))"
+    joins: [s]
+    grain: order
+    where: "s.delivery_date IS NOT NULL"
+    format: decimal
+    synonyms: [transit time, delivery time, lead time, days to deliver, transit days]
+
+dimensions:
+  month:
+    label: Month
+    sql:
+      default: "TO_CHAR(o.order_date, 'YYYY-MM')"
+      sqlite: "strftime('%Y-%m', o.order_date)"
+    joins: []
+    time: true
+    synonyms: [month, monthly, month wise, month-wise, per month, each month, trend, over time]
+  quarter:
+    label: Quarter
+    sql:
+      default: "TO_CHAR(o.order_date, 'YYYY') || '-Q' || TO_CHAR(o.order_date, 'Q')"
+      sqlite: "strftime('%Y', o.order_date) || '-Q' || ((CAST(strftime('%m', o.order_date) AS INTEGER) + 2) / 3)"
+    joins: []
+    time: true
+    synonyms: [quarter, quarterly, quarter wise, per quarter]
+  year:
+    label: Year
+    sql:
+      default: "CAST(EXTRACT(YEAR FROM o.order_date) AS INTEGER)"
+      sqlite: "CAST(strftime('%Y', o.order_date) AS INTEGER)"
+    joins: []
+    time: true
+    synonyms: [year, yearly, annual, per year, year wise]
+  region:
+    label: Region
+    sql: "r.name"
+    joins: [r]
+    synonyms: [region, regions, zone, zones, area, region wise]
+  plant:
+    label: Plant
+    sql: "p.name"
+    joins: [p]
+    synonyms: [plant, plants, factory, site, plant wise]
+  category:
+    label: Category
+    sql: "pr.category"
+    joins: [pr]
+    synonyms: [category, categories, product category, product line, segment of product]
+  product:
+    label: Product
+    sql: "pr.name"
+    joins: [pr]
+    synonyms: [product, products, sku, item, items]
+  customer:
+    label: Customer
+    sql: "c.name"
+    joins: [c]
+    synonyms: [customer, customers, client, clients, account, accounts, buyer]
+  segment:
+    label: Customer segment
+    sql: "c.segment"
+    joins: [c]
+    synonyms: [segment, segments, customer segment, channel]
+  city:
+    label: Customer city
+    sql: "c.city"
+    joins: [c]
+    synonyms: [city, cities]
+  transporter:
+    label: Transporter
+    sql: "t.name"
+    joins: [t]
+    synonyms: [transporter, transporters, carrier, carriers, logistics partner, vendor]
+  status:
+    label: Order status
+    sql: "o.status"
+    joins: []
+    synonyms: [status, order status]

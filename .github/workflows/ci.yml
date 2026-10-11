@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: analytics
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      T2SQL_TEST_PG_URL: postgresql+psycopg://postgres:postgres@localhost:5432/analytics
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[all,dev]"
+      - name: Tests (SQLite + PostgreSQL)
+        run: pytest -q
+      - name: Execution-accuracy gate
+        run: |
+          t2sql seed
+          t2sql eval --min-accuracy 0.95
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: reports/

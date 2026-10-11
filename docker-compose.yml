@@ -1,0 +1,48 @@
+# Full stack: PostgreSQL (data), MongoDB (conversation memory), the API and the Streamlit UI.
+#   docker compose up --build
+#   API  -> http://localhost:8000/docs
+#   UI   -> http://localhost:8501
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: analytics
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      retries: 20
+
+  mongo:
+    image: mongo:7
+    ports: ["27017:27017"]
+
+  seed:
+    build: .
+    command: ["t2sql", "seed", "--url", "postgresql+psycopg://postgres:postgres@postgres:5432/analytics"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    build: .
+    environment:
+      T2SQL_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/analytics
+      T2SQL_MEMORY_BACKEND: mongo
+      T2SQL_MONGO_URI: mongodb://mongo:27017
+    env_file:
+      - path: .env
+        required: false
+    ports: ["8000:8000"]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+      mongo: {condition: service_started}
+
+  ui:
+    build: .
+    command: ["streamlit", "run", "src/t2sql/ui/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    environment:
+      T2SQL_API_URL: http://api:8000
+    ports: ["8501:8501"]
+    depends_on: [api]
