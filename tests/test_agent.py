@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from t2sql.agent import AnthropicChatModel, ModelTurn, OpenAIChatModel, ToolCall
-from t2sql.config import Settings
 from t2sql.service import TextToSQLService
 
 

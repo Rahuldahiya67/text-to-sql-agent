@@ -1,6 +1,6 @@
 import pytest
 
-from t2sql.db import QueryError, create_readonly_engine, dialect_of, introspect, render_schema, run_query
+from t2sql.db import QueryError, create_readonly_engine, dialect_of, render_schema, run_query
 from t2sql.semantic import select_tables
 
 
